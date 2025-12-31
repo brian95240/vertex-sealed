@@ -122,12 +122,14 @@ def unified_hardware_scan() -> HardwareProfile:
                 # Warmup
                 for _ in range(20):
                     _ = x @ x
+                torch.cuda.synchronize()  # CRITICAL: Wait for warmup to complete
                 
                 # Benchmark
                 iterations = 200
                 start = time.perf_counter_ns()
                 for _ in range(iterations):
                     _ = x @ x
+                torch.cuda.synchronize()  # CRITICAL: Wait for all operations to complete
                 elapsed = time.perf_counter_ns() - start
             
             hw.flops = (2 * size**3 * iterations) / (elapsed / 1e9)
