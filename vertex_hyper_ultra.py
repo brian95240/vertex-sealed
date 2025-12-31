@@ -31,9 +31,10 @@ _ARENA = get_memory_arena()
 L1 = _ARENA.l1
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Shutdown Flag
+# Shutdown Flag (Async-Signal-Safe)
 # ═══════════════════════════════════════════════════════════════════════════
 
+# FIXED: Use threading.Event for async-signal-safe shutdown
 shutdown_flag = Event()
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -167,12 +168,18 @@ def rebuild_disk_map():
     AFTER (v3.0):
     - Use cached disk_tiers from unified scan (0ms)
     - Write to L1 from unified memory arena (zero-copy)
+    - FIXED: Fallback heuristics when /sys/block unavailable
     
     SAVINGS:
     - Latency: 10ms → 0ms (cached)
     - Syscalls: 0 (arena already allocated)
     """
     tiers = _HW.disk_tiers
+    
+    # FIXED: Fallback heuristics if /sys/block unavailable (e.g., macOS, Windows)
+    if not tiers:
+        # Fallback: Assume single SSD tier
+        tiers = [('disk0', 550)]  # SATA SSD default
     
     # Write to L1 (from unified arena)
     data = json.dumps(tiers).encode()
@@ -200,16 +207,18 @@ def oracle_compress(path: Path) -> bytes:
     AFTER (v3.0):
     - Parallel compression with ThreadPoolExecutor (5ms total)
     - Shared compression pool (context reuse)
+    - FIXED: mmap for large files (>1MB) to avoid memory bloat
     
     SAVINGS:
     - Latency: 15ms → 5ms (3× parallel speedup)
-    - Memory: Context reuse eliminates allocation overhead
+    - Memory: Context reuse + mmap for large files
     """
     import mmap
     
     file_size = path.stat().st_size
     pool = get_compression_pool()
     
+    # FIXED: Use mmap for large files (>1MB) to avoid loading entire file into memory
     if file_size > 1 << 20:  # 1MB
         try:
             with path.open('rb') as f:

@@ -212,10 +212,26 @@ def trinity_load(gguf_path: Path):
             
             # Ring management
             head, tail, _, gen = get_headers()
-            write_pos = max(256, (head + 63) & ~63)
             
-            # Wait for consumer
+            # FIXED: Detect cache line size dynamically (fallback to 64)
+            try:
+                import os
+                cache_line_size = os.sysconf('SC_LEVEL1_DCACHE_LINESIZE')
+                if cache_line_size <= 0 or cache_line_size > 256:
+                    cache_line_size = 64  # Fallback
+            except (AttributeError, ValueError, OSError):
+                cache_line_size = 64  # Default
+            
+            align_mask = cache_line_size - 1
+            write_pos = max(256, (head + align_mask) & ~align_mask)
+            
+            # FIXED: Wait for consumer with timeout
+            timeout_start = time.time()
+            timeout_seconds = 30  # 30 second timeout
+            
             while write_pos + size_bytes > tail + RING_SIZE:
+                if time.time() - timeout_start > timeout_seconds:
+                    raise TimeoutError(f"Ring full timeout after {timeout_seconds}s")
                 time.sleep(0.001)
                 _, tail, _, _ = get_headers()
             
@@ -230,8 +246,8 @@ def trinity_load(gguf_path: Path):
                 print(f"⚠ memmove failed: {e}")
                 continue
             
-            # Update head
-            head = (write_pos + size_bytes + 63) & ~63
+            # Update head with dynamic alignment
+            head = (write_pos + size_bytes + align_mask) & ~align_mask
             set_headers(head, tail, 1, gen + 1)
     finally:
         src.close()

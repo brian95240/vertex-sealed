@@ -79,6 +79,7 @@ def unified_hardware_scan() -> HardwareProfile:
                 hw.l1_size = int(size_str[:-1]) * 1024
         
         # Disk speed detection (single /sys/block traversal)
+        # FIXED: Read max_sectors_kb for actual bandwidth detection
         if Path('/sys/block').exists():
             for dev in Path('/sys/block').iterdir():
                 try:
@@ -87,10 +88,26 @@ def unified_hardware_scan() -> HardwareProfile:
                         continue
                     
                     rotational = rotational_path.read_text().strip() == '1'
+                    
+                    # FIXED: Read max_sectors_kb to distinguish virtio-blk vs virtio-scsi
+                    max_sectors_path = dev / 'queue/max_sectors_kb'
+                    max_sectors = 512  # Default
+                    if max_sectors_path.exists():
+                        try:
+                            max_sectors = int(max_sectors_path.read_text().strip())
+                        except (ValueError, OSError):
+                            pass
+                    
                     if rotational:
                         speed = 120  # HDD
-                    elif 'nvme' in dev.name or 'vd' in dev.name:
-                        speed = 900  # NVMe or virtio-blk
+                    elif 'nvme' in dev.name:
+                        speed = 3500  # NVMe (3.5 GB/s typical)
+                    elif 'vd' in dev.name:
+                        # Distinguish virtio-blk (fast) vs virtio-scsi (slow)
+                        if max_sectors >= 1024:
+                            speed = 900  # virtio-blk
+                        else:
+                            speed = 200  # virtio-scsi
                     else:
                         speed = 550  # SATA SSD
                     
@@ -210,6 +227,13 @@ class CompressionPool:
     def decompress_zlib(self, data: bytes) -> bytes:
         """Decompress zlib data"""
         return zlib.decompress(data)
+    
+    def cleanup(self):
+        """FIXED: Explicit cleanup of compression contexts on shutdown"""
+        # zstd contexts are automatically cleaned up by Python GC
+        # This method exists for explicit resource management if needed
+        self._zstd_compress = None
+        self._zstd_decompress = None
 
 # Global singleton: All components use this
 _COMPRESSION_POOL = CompressionPool()
